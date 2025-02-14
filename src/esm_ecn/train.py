@@ -3,7 +3,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from esm_ecn.constants import DATA_FOLDER
-from esm_ecn.model import LitModel
+from esm_ecn.model import LitModel, LitSAE
 
 def setup_experiment(experiment_name, project, resume, wandb_debug, accelerator, epochs):
     # Initialize Wandb logger
@@ -34,31 +34,50 @@ def setup_experiment(experiment_name, project, resume, wandb_debug, accelerator,
         save_weights_only=False
     )
 
+    last_checkpoint_callback = ModelCheckpoint(
+        dirpath=DATA_FOLDER / 'checkpoints' / experiment_name,
+        filename='last-checkpoint',
+        save_top_k=1,
+        save_last=True,
+        save_weights_only=False
+    )
+
     # Initialize a trainer
     if accelerator == "cpu":
         trainer = pl.Trainer(
             max_epochs=epochs,
             logger=wandb_logger,
-            callbacks=[checkpoint_callback],
+            callbacks=[checkpoint_callback, last_checkpoint_callback],
             accelerator="cpu",
         )
     else:
         trainer = pl.Trainer(
             max_epochs=epochs,
             logger=wandb_logger,
-            callbacks=[checkpoint_callback],
+            callbacks=[checkpoint_callback, last_checkpoint_callback],
             accelerator="gpu",
             devices=1
         )
     
     return trainer, experiment_name
 
-def load_best_checkpoint(experiment_name, mlp, focal_loss, lr):
-    checkpoint_path = DATA_FOLDER / 'checkpoints' / experiment_name / "best-checkpoint.ckpt"
-    model = LitModel.load_from_checkpoint(checkpoint_path, model=mlp)
-    model.focal_loss = focal_loss
+def load_checkpoint(experiment_name, mlp=None, focal_loss=None, lr=None, SAE=False, model_dim=None, dict_dim=None, best=True):
+    if best:
+        checkpoint_path = DATA_FOLDER / 'checkpoints' / experiment_name / "best-checkpoint.ckpt"
+    else:
+        checkpoint_path = DATA_FOLDER / 'checkpoints' / experiment_name / "last-checkpoint.ckpt"
+    if SAE:
+        model = LitSAE.load_from_checkpoint(checkpoint_path, model_dim=model_dim, dict_dim=dict_dim)
+    else:
+        model = LitModel.load_from_checkpoint(checkpoint_path, model=mlp)
+    if focal_loss is not None:
+        model.focal_loss = focal_loss
     checkpoint = torch.load(checkpoint_path)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    if lr is not None:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    else:
+        optimizer = torch.optim.Adam(model.parameters())
     optimizer.load_state_dict(checkpoint['optimizer_states'][0])
-    model.optimizer = optimizer
+    if focal_loss is not None:
+        model.optimizer = optimizer
     return model
